@@ -58,10 +58,11 @@
 
 class SymbolicUART : public sc_core::sc_module {
 public:
+	bool slip_mode;
 	interrupt_gateway *plic;
 	tlm_utils::simple_target_socket<SymbolicUART> tsock;
 
-	SymbolicUART(sc_core::sc_module_name, uint32_t, SymbolicContext &_ctx, SymbolicFormat &_fmt);
+	SymbolicUART(sc_core::sc_module_name, uint32_t, SymbolicContext &_ctx, SymbolicFormat &_fmt, bool _slip_mode = false);
 	~SymbolicUART(void);
 
 	SC_HAS_PROCESS(SymbolicUART);
@@ -72,6 +73,8 @@ private:
 	SymbolicFormat &fmt;
 
 	uint32_t irq;
+	std::shared_ptr<clover::ConcolicValue> slip_end;
+	uint32_t rxdata_end;
 
 	// memory mapped configuration registers
 	uint32_t txdata = 0;

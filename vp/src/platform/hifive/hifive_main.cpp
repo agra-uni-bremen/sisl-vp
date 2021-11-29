@@ -129,12 +129,14 @@ public:
 	addr_t dram_end_addr = dram_start_addr + dram_size - 1;
 
 	bool enable_can = false;
+	bool slip_mode = false;
 	std::string input_format = "";
 
 	HifiveOptions(void) {
         	// clang-format off
 		add_options()
 			("enable-can", po::bool_switch(&enable_can), "enable support for CAN peripheral")
+			("slip-mode", po::bool_switch(&slip_mode), "use symbolic UART peripheral in SLIP mode")
 			("input-format", po::value<std::string>(&input_format), "symfmt input format specification");
         	// clang-format on
 	}
@@ -174,7 +176,7 @@ int sc_main(int argc, char **argv) {
 	SPI spi2("SPI2");
 	UART uart0("UART0", 3);
 	SymbolicFormat fmt(symbolic_context, opt.input_format);
-	SymbolicUART uart1("UART1", 4, symbolic_context, fmt);
+	SymbolicUART uart1("UART1", 4, symbolic_context, fmt, opt.slip_mode);
 	MaskROM maskROM("MASKROM");
 	DebugMemoryInterface dbg_if("DebugMemoryInterface");
 
