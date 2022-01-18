@@ -171,7 +171,7 @@ explore_paths(int argc, char **argv)
 
 		int ret;
 		if ((ret = sc_core::sc_elab_and_sim(argc, argv)))
-			return ret;
+			exit(ret);
 	} while (ctx.setupNewValues(tracer));
 
 	sc_core::sc_report_handler::release();
