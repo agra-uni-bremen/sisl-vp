@@ -27,6 +27,7 @@ public:
 	clover::ExecutionContext ctx;
 
 	SymbolicContext(void);
+	void assume(std::shared_ptr<clover::BitVector> constraint);
 };
 
 extern SymbolicContext symbolic_context;

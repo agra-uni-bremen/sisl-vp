@@ -18,6 +18,13 @@
 #ifndef RISCV_ISA_SYMBOLIC_EXPLORE_H
 #define RISCV_ISA_SYMBOLIC_EXPLORE_H
 
+#include <stdbool.h>
+
 int symbolic_explore(int argc, char **argv);
+
+namespace symbolic_exploration {
+	void stop(void);
+	bool was_stopped(void);
+};
 
 #endif

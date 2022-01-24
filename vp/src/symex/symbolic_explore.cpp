@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* Debug leaks with valgrind --leak-check=full --undef-value-errors=no
  * Also: Define valgrind here to prevent spurious Z3 memory leaks. */
@@ -46,6 +47,20 @@
 
 static std::filesystem::path *testcase_path = nullptr;
 static size_t errors_found = 0;
+static bool stopped = false;
+
+void
+symbolic_exploration::stop(void)
+{
+	stopped = true;
+	sc_core::sc_stop();
+}
+
+bool
+symbolic_exploration::was_stopped(void)
+{
+	return stopped;
+}
 
 static std::optional<std::string>
 dump_input(std::string fn)
@@ -145,19 +160,24 @@ explore_paths(int argc, char **argv)
 			std::chrono::seconds(std::atoi(timebudget));
 	}
 
+	// Set stop mode for symbolic_exploration::stop.
+	sc_core::sc_set_stop_mode(sc_core::SC_STOP_IMMEDIATE);
+
 	size_t paths_found = 0;
 	do {
-		if (budget.has_value()) {
-			time_point now = std::chrono::high_resolution_clock::now();
-			if (now >= budget) {
-				std::cout << "Time budget exceeded, terminating..." << std::endl;
-				break;
+		if (!symbolic_exploration::was_stopped()) {
+			if (budget.has_value()) {
+				time_point now = std::chrono::high_resolution_clock::now();
+				if (now >= budget) {
+					std::cout << "Time budget exceeded, terminating..." << std::endl;
+					break;
+				}
 			}
-		}
 
-		std::cout << std::endl << "##" << std::endl << "# "
-			<< ++paths_found << "th concolic execution" << std::endl
-			<< "##" << std::endl;
+			std::cout << std::endl << "##" << std::endl << "# "
+				<< ++paths_found << "th concolic execution" << std::endl
+				<< "##" << std::endl;
+		}
 
 		tracer.reset();
 
@@ -170,6 +190,7 @@ explore_paths(int argc, char **argv)
 		sc_core::sc_curr_simcontext = NULL;
 
 		int ret;
+		stopped = false;
 		if ((ret = sc_core::sc_elab_and_sim(argc, argv)))
 			exit(ret);
 	} while (ctx.setupNewValues(tracer));

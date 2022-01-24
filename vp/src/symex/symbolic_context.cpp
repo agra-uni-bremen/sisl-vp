@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include "symbolic_context.h"
+#include "symbolic_explore.h"
 
 #define TIMEOUT_ENV "SYMEX_TIMEOUT"
 
@@ -35,5 +36,15 @@ SymbolicContext::SymbolicContext(void)
 	if ((tm = getenv(TIMEOUT_ENV))) {
 		auto timeout = klee::time::Span(tm);
 		solver.setTimeout(timeout);
+	}
+}
+
+void
+SymbolicContext::assume(std::shared_ptr<clover::BitVector> constraint)
+{
+	try {
+		trace.assume(constraint);
+	} catch (clover::AssumeNotification &) {
+		symbolic_exploration::stop();
 	}
 }
