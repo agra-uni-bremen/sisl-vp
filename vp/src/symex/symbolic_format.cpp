@@ -15,10 +15,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <vector>
 #include <exception>
 #include <iostream>
 
 #include <err.h>
+#include <limits.h>
 #include <assert.h>
 #include <endian.h>
 #include <errno.h>
@@ -26,61 +28,50 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <sys/stat.h>
+#include <sys/mman.h>
+
 #include "symbolic_format.h"
 
-typedef enum {
-	SYMBOLIC_BYTES = 0x1,
-	CONCRETE_BYTES = 0x2,
-} FieldType;
+static ssize_t
+readfile(const char **dest, const char *fp)
+{
+	int fd;
+	off_t len;
+	struct stat st;
 
-FieldType
-intToFtype(uint8_t t) {
-	switch (t) {
-	case SYMBOLIC_BYTES:
-		return SYMBOLIC_BYTES;
-	case CONCRETE_BYTES:
-		return CONCRETE_BYTES;
-	default:
-		throw std::invalid_argument("invalid field type");
-	}
+	if ((fd = open(fp, O_RDONLY)) == -1)
+		return -1;
+	if (fstat(fd, &st))
+		return -1;
+	if ((len = st.st_size) <= 0)
+		return 0;
+
+	*dest = (const char*)mmap(NULL, (size_t)len, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (*dest == MAP_FAILED)
+		return -1;
+
+	close(fd);
+	return len;
 }
-
-class Field {
-public:
-	FieldType type;
-	uint64_t bitlen;
-	size_t bytelen;
-	uint8_t *value;
-
-	Field(FieldType _type, uint64_t _bitlen)
-	  : type(_type), bitlen(_bitlen) {
-		uint64_t rem;
-
-		// Round to next byte boundary.
-		if ((rem = bitlen % CHAR_BIT) == 0)
-			bytelen = _bitlen / CHAR_BIT;
-		else
-			bytelen = ((_bitlen - rem) + CHAR_BIT) / CHAR_BIT;
-
-		value = new uint8_t[bytelen]();
-	}
-
-	~Field(void) {
-		delete[] value;
-	}
-};
 
 SymbolicFormat::SymbolicFormat(SymbolicContext &_ctx, std::string path)
   : ctx(_ctx.ctx), solver(_ctx.solver)
 {
-	if (path == "") {
-		fd = -1;
+	if (path.empty()) {
+		input_str = nullptr;
 		return;
-	} else if (path == "-") {
-		fd = STDIN_FILENO;
-	} else if ((fd = open(path.c_str(), O_RDONLY)) == -1) {
-		throw std::system_error(errno, std::generic_category());
 	}
+
+	if ((input_len = readfile(&input_str, path.c_str())) == -1)
+		throw std::system_error(errno, std::generic_category());
+	if (input_len == 0) {
+		input_str = nullptr;
+		return;
+	}
+
+	assert(input_len <= INT_MAX);
+	bencode_init(&bencode, input_str, (int)input_len);
 
 	input = get_input();
 	offset = input->getWidth();
@@ -90,51 +81,142 @@ SymbolicFormat::SymbolicFormat(SymbolicContext &_ctx, std::string path)
 
 SymbolicFormat::~SymbolicFormat(void)
 {
-	if (fd < 0)
+	if (!input_str)
 		return;
 
-	if (close(fd) == -1)
-		err(EXIT_FAILURE, "close failed");
+	if (munmap((void *)input_str, input_len) == -1)
+		err(EXIT_FAILURE, "munmap failed");
+}
+
+std::optional<long int>
+SymbolicFormat::get_size(bencode_t *list_elem)
+{
+	long int value;
+	bencode_t size_elem;
+
+	if (bencode_list_get_next(list_elem, &size_elem) != 1)
+		return std::nullopt;
+	if (!bencode_is_int(&size_elem))
+		return std::nullopt;
+
+	if (!bencode_int_value(&size_elem, &value))
+		return std::nullopt;
+
+	return value;
+}
+
+std::optional<std::string>
+SymbolicFormat::get_name(bencode_t *list_elem)
+{
+	bencode_t name_elem;
+	const char *dest;
+	int dest_len;
+
+	if (bencode_list_get_next(list_elem, &name_elem) != 1)
+		return std::nullopt;
+	if (!bencode_is_string(&name_elem))
+		return std::nullopt;
+
+	if (!bencode_string_value(&name_elem, &dest, &dest_len))
+		return std::nullopt;
+
+	std::string ret(dest, dest_len);
+	return ret;
+}
+
+std::optional<std::shared_ptr<clover::ConcolicValue>>
+SymbolicFormat::get_value(bencode_t *list_elem)
+{
+	bencode_t value_elem;
+	int is_symbolic;
+	std::vector<uint8_t> concrete_value;
+	std::vector<std::string> constraints;
+
+	if (bencode_list_get_next(list_elem, &value_elem) != 1)
+		return std::nullopt;
+	if (!bencode_is_list(&value_elem))
+		return std::nullopt;
+
+	is_symbolic = -1;
+	while (bencode_list_has_next(&value_elem)) {
+		bencode_t list_elem;
+		long int int_value;
+		const char *str_value;
+		int str_length;
+
+		if (bencode_list_get_next(&value_elem, &list_elem) != 1)
+			return std::nullopt;
+		if (is_symbolic == -1)
+			is_symbolic = bencode_is_string(&list_elem);
+
+		if (is_symbolic) {
+			if (!bencode_is_string(&list_elem))
+				return std::nullopt;
+			if (!bencode_string_value(&list_elem, &str_value, &str_length))
+				return std::nullopt;
+
+			std::string constraint(str_value, str_length);
+			constraints.push_back(std::move(constraint));
+		} else { // is_concrete
+			if (!bencode_is_int(&list_elem))
+				return std::nullopt;
+			if (!bencode_int_value(&list_elem, &int_value))
+				return std::nullopt;
+
+			if (int_value > UINT8_MAX)
+				return std::nullopt;
+			concrete_value.push_back((uint8_t)int_value);
+		}
+	}
+
+	std::shared_ptr<clover::ConcolicValue> v;
+	if (is_symbolic) {
+		for (auto constraint : constraints)
+			std::cout << "Constraint: " << constraint << std::endl;
+		assert(0 && "not implemented");
+	} else {
+		v = solver.BVC(concrete_value.data(), concrete_value.size(), true);
+	}
+
+	return v;
 }
 
 std::shared_ptr<clover::ConcolicValue>
 SymbolicFormat::next_field(void)
 {
-	uint8_t type;
-	FieldType ftype;
-	uint64_t bitlen;
-	ssize_t recv;
+	bencode_t field_value;
+	long int bitsize;
+	std::string name;
+	std::shared_ptr<clover::ConcolicValue> value;
 
-	recv = read(fd, &type, sizeof(type));
-	if (recv != sizeof(type))
-		return nullptr; // EOF
-	ftype = intToFtype(type);
+	if (!bencode_list_has_next(&bencode))
+		return nullptr;
+	if (bencode_list_get_next(&bencode, &field_value) != 1)
+		throw std::out_of_range("unexpected end of bencode list");
+	if (!bencode_is_list(&field_value))
+		throw std::invalid_argument("invalid bencode field type");
 
-	recv = read(fd, &bitlen, sizeof(bitlen));
-	if (recv != sizeof(bitlen))
-		throw std::out_of_range("not length field");
-	bitlen = le64toh(bitlen);
+	auto n = get_name(&field_value);
+	if (!n.has_value())
+		throw std::invalid_argument("invalid bencode name field");
+	name = std::move(*n);
 
-	Field field(ftype, bitlen);
-	recv = read(fd, field.value, field.bytelen);
-	if (recv == -1 || (size_t)recv != field.bytelen)
-		throw std::out_of_range("not value field of given length");
+	auto s = get_size(&field_value);
+	if (!s.has_value())
+		throw std::invalid_argument("invalid bencode size field");
+	bitsize = *s;
 
-	std::shared_ptr<clover::ConcolicValue> v;
-	switch (ftype) {
-	case SYMBOLIC_BYTES:
-		v = ctx.getSymbolicBytes("input_field" + std::to_string(numSymField++), field.bytelen);
-		break;
-	case CONCRETE_BYTES:
-		v = solver.BVC(field.value, field.bytelen, true);
-		break;
-	default:
-		assert(0 && "unreachable");
-	}
+	auto v = get_value(&field_value);
+	if (!v.has_value())
+		throw std::invalid_argument("invalid bencode value field");
+	value = *v;
 
-	if (field.bitlen * 8 == field.bytelen)
-		return v;
-	return v->extract(0, field.bitlen);
+	// check if value is already aligned on byte boundary
+	// if not: extract only the relevant bits.
+	if (bitsize % CHAR_BIT != 0)
+		value = value->extract(0, bitsize);
+
+	return value;
 }
 
 std::shared_ptr<clover::ConcolicValue>
@@ -159,7 +241,7 @@ SymbolicFormat::get_input(void)
 std::shared_ptr<clover::ConcolicValue>
 SymbolicFormat::next_byte(void)
 {
-	if (fd == -1 || offset == 0)
+	if (!input_str || offset == 0)
 		return nullptr;
 
 	assert(offset % CHAR_BIT == 0);
@@ -174,7 +256,7 @@ SymbolicFormat::next_byte(void)
 size_t
 SymbolicFormat::remaning_bytes(void)
 {
-	if (fd == -1 || offset == 0)
+	if (!input_str || offset == 0)
 		return 0; // empty
 
 	auto width = input->getWidth();
