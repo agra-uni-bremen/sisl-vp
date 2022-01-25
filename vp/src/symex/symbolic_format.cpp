@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 
 #include "symbolic_format.h"
+#include "symbolic_context.h"
 
 static ssize_t
 readfile(const char **dest, const char *fp)
@@ -53,6 +54,21 @@ readfile(const char **dest, const char *fp)
 
 	close(fd);
 	return len;
+}
+
+static size_t
+to_byte_size(uint64_t bitsize)
+{
+	uint64_t rem;
+	size_t bytesize;
+
+	// Round to next byte boundary.
+	if ((rem = bitsize % CHAR_BIT) == 0)
+		bytesize = bitsize / CHAR_BIT;
+	else
+		bytesize = ((bitsize - rem) + CHAR_BIT) / CHAR_BIT;
+
+	return bytesize;
 }
 
 SymbolicFormat::SymbolicFormat(SymbolicContext &_ctx, std::string path)
@@ -125,12 +141,12 @@ SymbolicFormat::get_name(bencode_t *list_elem)
 }
 
 std::optional<std::shared_ptr<clover::ConcolicValue>>
-SymbolicFormat::get_value(bencode_t *list_elem)
+SymbolicFormat::get_value(bencode_t *list_elem, std::string name, size_t bytesize)
 {
 	bencode_t value_elem;
 	int is_symbolic;
 	std::vector<uint8_t> concrete_value;
-	std::vector<std::string> constraints;
+	std::shared_ptr<clover::ConcolicValue> symbolic_value;
 
 	if (bencode_list_get_next(list_elem, &value_elem) != 1)
 		return std::nullopt;
@@ -146,8 +162,15 @@ SymbolicFormat::get_value(bencode_t *list_elem)
 
 		if (bencode_list_get_next(&value_elem, &list_elem) != 1)
 			return std::nullopt;
-		if (is_symbolic == -1)
+
+		if (is_symbolic == -1) {
 			is_symbolic = bencode_is_string(&list_elem);
+			if (is_symbolic) {
+				// TODO: Build full Env first and constrain after.
+				symbolic_value = ctx.getSymbolicBytes(name, bytesize);
+				env[name] = *(symbolic_value->symbolic);
+			}
+		}
 
 		if (is_symbolic) {
 			if (!bencode_is_string(&list_elem))
@@ -156,7 +179,10 @@ SymbolicFormat::get_value(bencode_t *list_elem)
 				return std::nullopt;
 
 			std::string constraint(str_value, str_length);
-			constraints.push_back(std::move(constraint));
+			auto bv = solver.fromString(env, constraint);
+
+			// Enforce parsed constraint via symbolic_context.
+			symbolic_context.assume(bv);
 		} else { // is_concrete
 			if (!bencode_is_int(&list_elem))
 				return std::nullopt;
@@ -169,16 +195,13 @@ SymbolicFormat::get_value(bencode_t *list_elem)
 		}
 	}
 
-	std::shared_ptr<clover::ConcolicValue> v;
 	if (is_symbolic) {
-		for (auto constraint : constraints)
-			std::cout << "Constraint: " << constraint << std::endl;
-		assert(0 && "not implemented");
+		return symbolic_value;
 	} else {
-		v = solver.BVC(concrete_value.data(), concrete_value.size(), true);
+		if (concrete_value.size() != bytesize)
+			return std::nullopt;
+		return solver.BVC(concrete_value.data(), concrete_value.size(), true);
 	}
-
-	return v;
 }
 
 std::shared_ptr<clover::ConcolicValue>
@@ -206,7 +229,7 @@ SymbolicFormat::next_field(void)
 		throw std::invalid_argument("invalid bencode size field");
 	bitsize = *s;
 
-	auto v = get_value(&field_value);
+	auto v = get_value(&field_value, name, to_byte_size(bitsize));
 	if (!v.has_value())
 		throw std::invalid_argument("invalid bencode value field");
 	value = *v;
