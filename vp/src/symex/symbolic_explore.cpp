@@ -47,19 +47,14 @@
 
 static std::filesystem::path *testcase_path = nullptr;
 static size_t errors_found = 0;
+
+static const char* assume_mtype = "/AGRA/riscv-vp/assume-notification";
 static bool stopped = false;
 
 void
-symbolic_exploration::stop(void)
+symbolic_exploration::stop_assume(void)
 {
-	stopped = true;
-	sc_core::sc_stop();
-}
-
-bool
-symbolic_exploration::was_stopped(void)
-{
-	return stopped;
+	SC_REPORT_ERROR(assume_mtype, "AssumeNotification");
 }
 
 static std::optional<std::string>
@@ -85,19 +80,28 @@ static void
 report_handler(const sc_core::sc_report& report, const sc_core::sc_actions& actions)
 {
 	auto mtype = report.get_msg_type();
-	if (strcmp(mtype, "/AGRA/riscv-vp/host-error") || !testcase_path) {
+	if (!strcmp(mtype, "/AGRA/riscv-vp/host-error") && testcase_path) {
+		auto path = dump_input("error" + std::to_string(++errors_found));
+		if (!path.has_value())
+			return;
+
+		std::cerr << "Found error, use " << *path << " to reproduce." << std::endl;
+		if (getenv(ERR_EXIT_ENV)) {
+			std::cerr << "Exit on first error set, terminating..." << std::endl;
+			exit(EXIT_FAILURE);
+		}
+
+		sc_core::sc_stop();
+	} else if (!strcmp(mtype, assume_mtype)) {
+		stopped = true;
+
+		// Never display message for assume notifications.
+		sc_core::sc_actions new_actions = actions;
+		if (new_actions & sc_core::SC_DISPLAY)
+			new_actions &= ~sc_core::SC_DISPLAY;
+		sc_core::sc_report_handler::default_handler(report, new_actions);
+	} else {
 		sc_core::sc_report_handler::default_handler(report, actions);
-		return;
-	}
-
-	auto path = dump_input("error" + std::to_string(++errors_found));
-	if (!path.has_value())
-		return;
-
-	std::cerr << "Found error, use " << *path << " to reproduce." << std::endl;
-	if (getenv(ERR_EXIT_ENV)) {
-		std::cerr << "Exit on first error set, terminating..." << std::endl;
-		exit(EXIT_FAILURE);
 	}
 }
 
@@ -165,7 +169,7 @@ explore_paths(int argc, char **argv)
 
 	size_t paths_found = 0;
 	do {
-		if (!symbolic_exploration::was_stopped()) {
+		if (!stopped) {
 			if (budget.has_value()) {
 				time_point now = std::chrono::high_resolution_clock::now();
 				if (now >= budget) {
@@ -191,8 +195,10 @@ explore_paths(int argc, char **argv)
 
 		int ret;
 		stopped = false;
-		if ((ret = sc_core::sc_elab_and_sim(argc, argv)))
+		if ((ret = sc_core::sc_elab_and_sim(argc, argv)) && !stopped) {
+			std::cerr << "sc_main() exited with non-zero exit status" << std::endl;
 			exit(ret);
+		}
 	} while (ctx.setupNewValues(tracer));
 
 	sc_core::sc_report_handler::release();

@@ -45,6 +45,6 @@ SymbolicContext::assume(std::shared_ptr<clover::BitVector> constraint)
 	try {
 		trace.assume(constraint);
 	} catch (clover::AssumeNotification &) {
-		symbolic_exploration::stop();
+		symbolic_exploration::stop_assume();
 	}
 }
