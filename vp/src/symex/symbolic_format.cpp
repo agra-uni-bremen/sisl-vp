@@ -141,8 +141,10 @@ SymbolicFormat::get_name(bencode_t *list_elem)
 }
 
 std::optional<std::shared_ptr<clover::ConcolicValue>>
-SymbolicFormat::get_value(bencode_t *list_elem, std::string name, size_t bytesize)
+SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsize)
 {
+	bool is_padded;
+	size_t bytesize;
 	bencode_t value_elem;
 	int is_symbolic;
 	std::vector<uint8_t> concrete_value;
@@ -152,6 +154,9 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, size_t bytesiz
 		return std::nullopt;
 	if (!bencode_is_list(&value_elem))
 		return std::nullopt;
+
+	bytesize = to_byte_size(bitsize);
+	is_padded = bitsize % CHAR_BIT != 0;
 
 	is_symbolic = -1;
 	while (bencode_list_has_next(&value_elem)) {
@@ -168,6 +173,8 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, size_t bytesiz
 			if (is_symbolic) {
 				// TODO: Build full Env first and constrain after.
 				symbolic_value = ctx.getSymbolicBytes(name, bytesize);
+				if (is_padded)
+					symbolic_value = symbolic_value->extract(0, bitsize);
 				env[name] = *(symbolic_value->symbolic);
 			}
 		}
@@ -200,7 +207,11 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, size_t bytesiz
 	} else {
 		if (concrete_value.size() != bytesize)
 			return std::nullopt;
-		return solver.BVC(concrete_value.data(), concrete_value.size(), true);
+
+		auto bvc = solver.BVC(concrete_value.data(), concrete_value.size(), true);
+		if (is_padded)
+			bvc = bvc->extract(0, bitsize);
+		return bvc;
 	}
 }
 
@@ -229,15 +240,10 @@ SymbolicFormat::next_field(void)
 		throw std::invalid_argument("invalid bencode size field");
 	bitsize = *s;
 
-	auto v = get_value(&field_value, name, to_byte_size(bitsize));
+	auto v = get_value(&field_value, name, bitsize);
 	if (!v.has_value())
 		throw std::invalid_argument("invalid bencode value field");
 	value = *v;
-
-	// check if value is already aligned on byte boundary
-	// if not: extract only the relevant bits.
-	if (bitsize % CHAR_BIT != 0)
-		value = value->extract(0, bitsize);
 
 	return value;
 }

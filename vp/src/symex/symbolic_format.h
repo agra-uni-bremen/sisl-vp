@@ -40,7 +40,7 @@ private:
 
 	std::optional<long int> get_size(bencode_t *list_elem);
 	std::optional<std::string> get_name(bencode_t *list_elem);
-	std::optional<std::shared_ptr<clover::ConcolicValue>> get_value(bencode_t *list_elem, std::string name, size_t bytesize);
+	std::optional<std::shared_ptr<clover::ConcolicValue>> get_value(bencode_t *list_elem, std::string name, uint64_t bitsize);
 
 	std::shared_ptr<clover::ConcolicValue> next_field(void);
 	std::shared_ptr<clover::ConcolicValue> get_input(void);
