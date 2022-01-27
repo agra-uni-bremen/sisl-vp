@@ -34,6 +34,9 @@
 #include "symbolic_format.h"
 #include "symbolic_context.h"
 
+// True if the given bit size is NOT aligned on a byte boundary.
+#define HAS_PADDING(BITSIZE) (BITSIZE % CHAR_BIT != 0)
+
 static ssize_t
 readfile(const char **dest, const char *fp)
 {
@@ -104,6 +107,17 @@ SymbolicFormat::~SymbolicFormat(void)
 		err(EXIT_FAILURE, "munmap failed");
 }
 
+std::shared_ptr<clover::ConcolicValue>
+SymbolicFormat::make_symbolic(std::string name, uint64_t bitsize, size_t bytesize)
+{
+	auto symbolic_value = ctx.getSymbolicBytes(name, bytesize);
+	if (HAS_PADDING(bitsize))
+		symbolic_value = symbolic_value->extract(0, bitsize);
+
+	env[name] = *(symbolic_value->symbolic);
+	return symbolic_value;
+}
+
 std::optional<long int>
 SymbolicFormat::get_size(bencode_t *list_elem)
 {
@@ -143,7 +157,6 @@ SymbolicFormat::get_name(bencode_t *list_elem)
 std::optional<std::shared_ptr<clover::ConcolicValue>>
 SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsize)
 {
-	bool is_padded;
 	size_t bytesize;
 	bencode_t value_elem;
 	int is_symbolic;
@@ -154,9 +167,7 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsi
 		return std::nullopt;
 	if (!bencode_is_list(&value_elem))
 		return std::nullopt;
-
 	bytesize = to_byte_size(bitsize);
-	is_padded = bitsize % CHAR_BIT != 0;
 
 	is_symbolic = -1;
 	while (bencode_list_has_next(&value_elem)) {
@@ -170,13 +181,8 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsi
 
 		if (is_symbolic == -1) {
 			is_symbolic = bencode_is_string(&list_elem);
-			if (is_symbolic) {
-				// TODO: Build full Env first and constrain after.
-				symbolic_value = ctx.getSymbolicBytes(name, bytesize);
-				if (is_padded)
-					symbolic_value = symbolic_value->extract(0, bitsize);
-				env[name] = *(symbolic_value->symbolic);
-			}
+			if (is_symbolic)
+				symbolic_value = make_symbolic(name, bitsize, bytesize);
 		}
 
 		if (is_symbolic) {
@@ -189,6 +195,7 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsi
 			auto bv = solver.fromString(env, constraint);
 
 			// Enforce parsed constraint via symbolic_context.
+			// TODO: Build full Env first and constrain after.
 			symbolic_context.assume(bv);
 		} else { // is_concrete
 			if (!bencode_is_int(&list_elem))
@@ -202,6 +209,9 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsi
 		}
 	}
 
+	if (is_symbolic == -1) // unconstrained symbolic value
+		return make_symbolic(name, bitsize, bytesize);
+
 	if (is_symbolic) {
 		return symbolic_value;
 	} else {
@@ -209,7 +219,7 @@ SymbolicFormat::get_value(bencode_t *list_elem, std::string name, uint64_t bitsi
 			return std::nullopt;
 
 		auto bvc = solver.BVC(concrete_value.data(), concrete_value.size(), true);
-		if (is_padded)
+		if (HAS_PADDING(bitsize))
 			bvc = bvc->extract(0, bitsize);
 		return bvc;
 	}

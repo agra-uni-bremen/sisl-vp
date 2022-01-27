@@ -38,6 +38,8 @@ private:
 	ssize_t input_len;
 	bencode_t bencode;
 
+	std::shared_ptr<clover::ConcolicValue> make_symbolic(std::string name, uint64_t bitsize, size_t bytesize);
+
 	std::optional<long int> get_size(bencode_t *list_elem);
 	std::optional<std::string> get_name(bencode_t *list_elem);
 	std::optional<std::shared_ptr<clover::ConcolicValue>> get_value(bencode_t *list_elem, std::string name, uint64_t bitsize);
