@@ -134,6 +134,19 @@ create_testdir(void)
 		throw std::runtime_error("std::atexit failed");
 }
 
+static std::chrono::duration<double, std::milli> solver_time;
+
+static bool
+setupNewValues(clover::ExecutionContext &ctx, clover::Trace &tracer)
+{
+	auto start = std::chrono::steady_clock::now();
+	auto r = ctx.setupNewValues(tracer);
+	auto end = std::chrono::steady_clock::now();
+
+	solver_time += end - start;
+	return r;
+}
+
 static int
 run_test(const char *path, int argc, char **argv)
 {
@@ -199,7 +212,7 @@ explore_paths(int argc, char **argv)
 			std::cerr << "sc_main() exited with non-zero exit status" << std::endl;
 			exit(ret);
 		}
-	} while (ctx.setupNewValues(tracer));
+	} while (setupNewValues(ctx, tracer));
 
 	sc_core::sc_report_handler::release();
 	delete sc_core::sc_curr_simcontext;
@@ -228,9 +241,11 @@ symbolic_explore(int argc, char **argv)
 	sc_core::sc_report_handler::set_handler(report_handler);
 
 	size_t paths_found = explore_paths(argc, argv);
+	auto stime = std::chrono::duration_cast<std::chrono::seconds>(solver_time);
 
 	std::cout << std::endl << "---" << std::endl;
 	std::cout << "Unique paths found: " << paths_found << std::endl;
+	std::cout << "Solver Time: " << stime.count() << " seconds" << std::endl;
 	if (errors_found > 0) {
 		std::cout << "Errors found: " << errors_found << std::endl;
 		std::cout << "Testcase directory: " << *testcase_path << std::endl;
