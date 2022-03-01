@@ -74,6 +74,7 @@ private:
 
 	uint32_t irq;
 	std::shared_ptr<clover::ConcolicValue> slip_end;
+	std::shared_ptr<clover::ConcolicValue> slip_esc_esc;
 	uint32_t rxdata_end;
 
 	// memory mapped configuration registers

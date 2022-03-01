@@ -73,6 +73,7 @@ SymbolicUART::SymbolicUART(sc_core::sc_module_name, uint32_t irqsrc, SymbolicCon
 
 	if (slip_mode) {
 		slip_end = solver.BVC(std::nullopt, (uint8_t)0300);
+		slip_esc_esc = solver.BVC(std::nullopt, (uint8_t)0335);
 		rxdata_end = (uint32_t)0300;
 	} else {
 		rxdata_end = 1 << 31;
@@ -117,7 +118,7 @@ void SymbolicUART::register_access_callback(const vp::map::register_access_t &r)
 
 				auto reg = symbolic_byte;
 				if (slip_mode)
-					reg = reg->urem(slip_end);
+					reg = (reg->uge(slip_end))->band(reg->ule(slip_esc_esc))->select(reg->urem(slip_end), reg);
 				reg = reg->zext(32);
 
 				rxdata = solver.getValue<uint32_t>(reg->concrete);
