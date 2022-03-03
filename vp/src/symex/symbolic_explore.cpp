@@ -25,6 +25,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <signal.h>
 
 /* Debug leaks with valgrind --leak-check=full --undef-value-errors=no
  * Also: Define valgrind here to prevent spurious Z3 memory leaks. */
@@ -47,6 +48,19 @@
 
 static std::filesystem::path *testcase_path = nullptr;
 static size_t errors_found = 0;
+static size_t paths_found = 0;
+
+static void
+dump_stats(void)
+{
+	std::cout << std::endl << "---" << std::endl;
+	std::cout << "Unique paths found: " << paths_found << std::endl;
+	// TODO: Also dump instruction branch coverage here.
+	if (errors_found > 0) {
+		std::cout << "Errors found: " << errors_found << std::endl;
+		std::cout << "Testcase directory: " << *testcase_path << std::endl;
+	}
+}
 
 static const char* assume_mtype = "/AGRA/riscv-vp/assume-notification";
 static bool stopped = false;
@@ -106,6 +120,17 @@ report_handler(const sc_core::sc_report& report, const sc_core::sc_actions& acti
 }
 
 static void
+sigalrm_handler(int signum)
+{
+	(void)signum;
+
+	std::cout << "Time budget exceeded, terminating..." << std::endl;
+
+	dump_stats();
+	exit(EXIT_SUCCESS);
+}
+
+static void
 remove_testdir(void)
 {
 	assert(testcase_path != nullptr);
@@ -162,37 +187,19 @@ run_test(const char *path, int argc, char **argv)
 	return sc_core::sc_elab_and_sim(argc, argv);
 }
 
-static size_t
+static int
 explore_paths(int argc, char **argv)
 {
 	clover::ExecutionContext &ctx = symbolic_context.ctx;
 	clover::Trace &tracer = symbolic_context.trace;
 
-	typedef std::chrono::high_resolution_clock::time_point time_point;
-	std::optional<time_point> budget;
-
-	char *timebudget = getenv(TIMEBUDGET_ENV);
-	if (timebudget) {
-		budget = std::chrono::high_resolution_clock::now() +
-			std::chrono::seconds(std::atoi(timebudget));
-	}
-
 	// Set stop mode for symbolic_exploration::stop.
 	sc_core::sc_set_stop_mode(sc_core::SC_STOP_IMMEDIATE);
 
-	size_t paths_found = 0;
 	do {
 		if (!stopped) {
-			if (budget.has_value()) {
-				time_point now = std::chrono::high_resolution_clock::now();
-				if (now >= budget) {
-					std::cout << "Time budget exceeded, terminating..." << std::endl;
-					break;
-				}
-			}
-
 			std::cout << std::endl << "##" << std::endl << "# "
-				<< ++paths_found << "th concolic execution" << std::endl
+				<< paths_found + 1 << "th concolic execution" << std::endl
 				<< "##" << std::endl;
 		}
 
@@ -208,16 +215,43 @@ explore_paths(int argc, char **argv)
 
 		int ret;
 		stopped = false;
-		if ((ret = sc_core::sc_elab_and_sim(argc, argv)) && !stopped) {
-			std::cerr << "sc_main() exited with non-zero exit status" << std::endl;
-			exit(ret);
-		}
+		if ((ret = sc_core::sc_elab_and_sim(argc, argv)) && !stopped)
+			return ret;
+
+		if (!stopped)
+			paths_found++;
 	} while (setupNewValues(ctx, tracer));
 
 	sc_core::sc_report_handler::release();
 	delete sc_core::sc_curr_simcontext;
 
-	return paths_found;
+	return 0;
+}
+
+static void
+setup_timeout(void)
+{
+	struct sigaction sa;
+
+	char *timebudget = getenv(TIMEBUDGET_ENV);
+	if (!timebudget)
+		return;
+
+	errno = 0;
+	auto seconds = strtoul(timebudget, NULL, 10);
+	if (!seconds && errno)
+		throw std::system_error(errno, std::generic_category());
+
+	sa.sa_flags = SA_RESTART;
+	sa.sa_handler = sigalrm_handler;
+	if (sigemptyset(&sa.sa_mask) == -1)
+		throw std::system_error(errno, std::generic_category());
+	if (sigaction(SIGALRM, &sa, NULL) == -1)
+		throw std::system_error(errno, std::generic_category());
+
+	int r = alarm(seconds);
+	assert(r == 0);
+	(void)r;
 }
 
 int
@@ -240,22 +274,15 @@ symbolic_explore(int argc, char **argv)
 	// Set report handler for detecting errors
 	sc_core::sc_report_handler::set_handler(report_handler);
 
-	size_t paths_found = explore_paths(argc, argv);
-	auto stime = std::chrono::duration_cast<std::chrono::seconds>(solver_time);
-
-	std::cout << std::endl << "---" << std::endl;
-	std::cout << "Unique paths found: " << paths_found << std::endl;
-	std::cout << "Solver Time: " << stime.count() << " seconds" << std::endl;
-	if (errors_found > 0) {
-		std::cout << "Errors found: " << errors_found << std::endl;
-		std::cout << "Testcase directory: " << *testcase_path << std::endl;
-	}
+	setup_timeout();
+	int ret = explore_paths(argc, argv);
+	dump_stats();
 
 #ifdef VALGRIND
 	Z3_finalize_memory();
 #endif
 
-	return 0;
+	return ret;
 }
 
 #endif
