@@ -50,11 +50,16 @@ static std::filesystem::path *testcase_path = nullptr;
 static size_t errors_found = 0;
 static size_t paths_found = 0;
 
+static std::chrono::duration<double, std::milli> solver_time;
+
 static void
 dump_stats(void)
 {
+	auto stime = std::chrono::duration_cast<std::chrono::seconds>(solver_time);
+
 	std::cout << std::endl << "---" << std::endl;
 	std::cout << "Unique paths found: " << paths_found << std::endl;
+	std::cout << "Solver Time: " << stime.count() << " seconds" << std::endl;
 	// TODO: Also dump instruction branch coverage here.
 	if (errors_found > 0) {
 		std::cout << "Errors found: " << errors_found << std::endl;
@@ -158,8 +163,6 @@ create_testdir(void)
 	if (std::atexit(remove_testdir))
 		throw std::runtime_error("std::atexit failed");
 }
-
-static std::chrono::duration<double, std::milli> solver_time;
 
 static bool
 setupNewValues(clover::ExecutionContext &ctx, clover::Trace &tracer)
