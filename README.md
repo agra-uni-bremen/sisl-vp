@@ -2,6 +2,21 @@
 
 Enhanced version of [SymEx-VP](https://github.com/agra-uni-bremen/symex-vp) with support for [SISL](https://github.com/agra-uni-bremen/sisl) input specifications.
 
+## Installation
+
+This software is best installed using [Docker](https://www.docker.io/).
+To build a Docker image for SISL-VP run the following command:
+
+	$ docker build -t sisl-vp .
+
+Afterwards, create a new Docker container from this image using:
+
+	$ docker run -it sisl-vp
+
+Within the Docker container both the [SISL Scheme
+DSL](https://github.com/agra-uni-bremen/sisl) as well as the SISL
+enhanced version of SymEx-VP are available.
+
 ## Acknowledgements
 
 This work was supported in part by the German Federal Ministry of
